@@ -3,10 +3,10 @@ import asyncio
 from typing import Tuple, List
 
 import moviepy.editor as mp
-from deepgram import Deepgram
 from rich import print
 
-from conf import IMAGEMAGIK_LOCATION, DEEPGRAM_KEY, CONFIG
+from conf import IMAGEMAGIK_LOCATION, CONFIG
+from providers import get_provider, PROVIDERS
 
 # Required for Windows users
 if os.name == "nt":
@@ -61,33 +61,21 @@ class DeepSub:
         print(f"[bold blue]Using Video path: [/bold blue] {self.video_path}")
 
     async def get_subtitles(self) -> List[Tuple[float, str]]:
-        """Runs the video path through Deepgram and returns the subtitles as a list of tuples."""
-        # Initialises Deepgram
-        dg_client = Deepgram(DEEPGRAM_KEY)
+        """Transcribes the video with the configured STT provider.
 
-        with open(self.video_path, "rb") as f:
-            video_data = f.read()
+        The engine is selected via ``CONFIG["STT_PROVIDER"]`` ("deepgram" or
+        "60db"). Whichever provider runs, the result is always a list of
+        ``(start_time, word)`` tuples, so the rendering code stays unchanged.
+        """
+        # Picks the configured engine (Deepgram or 60db) behind a shared interface.
+        provider = get_provider()
 
-
-        source = {"buffer": video_data, "mimetype": "video/mp4"}
-        options = {"punctuate": True, "language": "en-US"}
-
-        print("⚡ Fetching the Video Transcripts from [red]Deepgram[/red]")
-        response = await dg_client.transcription.prerecorded(source, options)
+        print(f"⚡ Fetching the Video Transcripts from [red]{provider.name}[/red]")
+        subtitles = await provider.transcribe(self.video_path, self.video)
 
         print(
-            "✅ [green]Deepgram has sent back the subtitles.[/green] [blue]I will now process them and render them on the video.[/blue]"
+            f"✅ [green]{provider.name} has sent back the subtitles.[/green] [blue]I will now process them and render them on the video.[/blue]"
         )
-
-        subtitles = []
-
-        # Iterates through the response and creates a list of tuples
-        for word in response["results"]["channels"][0]["alternatives"][0]["words"]:
-            start_time, word = word["start"], word["word"]
-
-            start_time = round(start_time, 3)
-
-            subtitles.append((start_time, word))
 
         return subtitles
 
@@ -184,13 +172,21 @@ class DeepSub:
         Checks the config file for correct values
         """
 
-        if not all(thing in CONFIG for thing in ["OUTPUT_FPS", "AUDIO", "VIDEO_CODEC", "OUTPUT_FILE"]):
+        required_keys = ["OUTPUT_FPS", "AUDIO", "VIDEO_CODEC", "OUTPUT_FILE", "STT_PROVIDER", "STT_LANGUAGE"]
+        if not all(thing in CONFIG for thing in required_keys):
             print(
                 f"[bold red]Please check your config file. The following keys are missing:[/bold red]\n"
             )
-            for thing in ["OUTPUT_FPS", "AUDIO", "VIDEO_CODEC", "OUTPUT_FILE"]:
+            for thing in required_keys:
                 if thing not in CONFIG.keys():
                     print(f"{thing}")
+            exit()
+
+        # Checks the STT provider is one we actually support
+        if CONFIG["STT_PROVIDER"].lower() not in PROVIDERS:
+            print(
+                f"[bold red]Please check your config file. The [italic blue]STT_PROVIDER[/italic blue] key must be one of: [italic green]{', '.join(PROVIDERS)}[/italic green]. You have entered: [italic blue]{CONFIG['STT_PROVIDER']}[/italic blue].[/bold red]"
+            )
             exit()
 
         # Checks if output_fps is an integer
